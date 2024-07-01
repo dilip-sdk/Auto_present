@@ -1,6 +1,6 @@
 from main import GesturePresentation
 import  cv2
-gesture_presentation = GesturePresentation(detection=True, doc_path="")
+gesture_presentation = GesturePresentation(detection=True, doc_path="FIFA World Cup Analysis.pdf")
 # Run the presentation
 result_image = gesture_presentation.run()
 
