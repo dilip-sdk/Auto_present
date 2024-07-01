@@ -1,135 +1,275 @@
 import os
-from cvzone.HandTrackingModule import HandDetector
 import cv2
 import numpy as np
+from cvzone.HandTrackingModule import HandDetector
+from thickness import GestureThicknessController
+from slides import save_document_pages_as_images
+from draw import Show
 
-# Define the dimensions
-width, height = 1280, 720  # Assuming imgCurrent.shape is (1080, 1920, 3)
-folderPath = "Presentation"
-imgNumber = 0
-hs, ws = int(120 * 1), int(213 * 1)  # width and height of small image
-gestureThreshold =300
+class GesturePresentation:
+    def __init__(self, detection=True, doc_path=""):
+        self.detection = detection
+        self.doc_path = doc_path
+        self.folderPath = "Presentation"
+        self.brushThickness = 12
+        self.eraserThickness = 20
+        self.width, self.height = 1280, 720
+        self.gestureThreshold = 400
+        self.buttonPressed = False
+        self.counter = 0
+        self.delay = 30
+        self.annotations = [[]]
+        self.annotationColors = [(255, 0, 255)]
+        self.annotationThicknesses = [self.brushThickness]
+        self.annotationNumber = 0
+        self.annotationStart = False
+        self.smoothening = 5
+        self.prev_x, self.prev_y = 0, 0
+        self.drawColor = (255, 0, 0)
+        self.controller = GestureThicknessController()
+        self.Mode = "brush"
+        self.thicknessModeActive = False
+        self.imgNumber = 0
 
-# Initialize the webcam
-cap = cv2.VideoCapture(0)
-# cap= cv2.VideoCapture("http://192.168.20.4:8080/video")
-cap.set(3, width)
-cap.set(4, height)
-buttonPressed = False
-counter = 0
-delay = 30
-annotations = [[]]
-annotationNumber = 0
-annotationStart = False
+        if len(self.doc_path) != 0:
+            save_document_pages_as_images(self.doc_path, self.folderPath)
 
-# Load and sort images from the folder
-pathImages = sorted(os.listdir(folderPath), key=len)
+        self.pathImages = sorted(os.listdir(self.folderPath), key=len)
+        print(f"Loaded images: {self.pathImages}")
 
-# Hand Detector
-detectorHand = HandDetector(detectionCon=0.9, maxHands=1)
+        self.detectorHand = HandDetector(detectionCon=0.9, maxHands=1)
+        self.cap = cv2.VideoCapture(0)
+        self.cap.set(3, self.width)
+        self.cap.set(4, self.height)
 
-# Initialize variables for smoothing filter
-smoothening = 2
-prev_x, prev_y = 0, 0
-while True:
-    success, img = cap.read()
-    if not success:
-        print("Failed to capture image from webcam")
-        break
+        self.overlayList1 = self.load_images("Header")
+        self.header = self.overlayList1[0]
+        self.overlayList2 = self.load_images("thickness_image")
+        self.header_brush = self.overlayList2[0]
+        self.header_erase = self.overlayList2[1]
 
-    img = cv2.flip(img, 1)
+    def load_images(self, folderPath):
+        images = []
+        myList = os.listdir(folderPath)
+        for imPath in myList:
+            image = cv2.imread(f'{folderPath}/{imPath}')
+            if image is not None:
+                images.append(image)
+            else:
+                print(f"Failed to load image: {imPath}")
+        return images
 
-    pathFullImage = os.path.join(folderPath, pathImages[imgNumber])
-    imgCurrent = cv2.imread(pathFullImage)
-    # print(imgCurrent.shape)
-    cv2.line(img, (0, gestureThreshold), (width, gestureThreshold), (0, 255, 0), 10)
-    hands, img = detectorHand.findHands(img)  # with draw
-    if hands and buttonPressed is False:
-        hand = hands[0]
-        cx, cy = hand["center"]
-        lmList = hand["lmList"]  # List of 21 Landmark points
-        fingers = detectorHand.fingersUp(hand)
-        xVal = int(np.interp(lmList[8][0], [(width // 2), width], [0, width]))
-        yVal = int(np.interp(lmList[8][1], [150, height - 150], [0, height]))
-        xVal = prev_x + (xVal - prev_x) // smoothening
-        yVal = prev_y + (yVal - prev_y) // smoothening
-        prev_x, prev_y = xVal, yVal
-        indexFinger = xVal, yVal
-        # print(fingers)
-
-        if cy <= gestureThreshold:  # If hand is at the height of the face
-            if fingers == [1, 0, 0, 0, 0]:
-                # print("Left")
-
-                if imgNumber>0:
-                    buttonPressed = True
-                    annotations = [[]]
-                    annotationNumber = 0
-                    annotationStart = False
-                    imgNumber-=1
-            if fingers == [0, 0, 0, 0, 1]:
-                # print("Right")
-
-                if imgNumber <len(pathImages)-1:
-                    buttonPressed = True
-                    annotations = [[]]
-                    annotationNumber = 0
-                    annotationStart = False
-                    imgNumber += 1
-            #Gesture 3-show Pointer
-        if fingers==[0,1,1,0,0]:
-            cv2.circle(imgCurrent, indexFinger, 12, (0, 0, 255), cv2.FILLED)
-        if fingers == [0, 1, 0, 0, 0]:
-            if annotationStart is False:
-                annotationStart = True
-                annotationNumber += 1
-                annotations.append([])
-            print(annotationNumber)
-            annotations[annotationNumber].append(indexFinger)
-            cv2.circle(imgCurrent, indexFinger, 12, (0, 0, 255), cv2.FILLED)
-
+    def run(self):
+        if len(self.pathImages) != 0:
+            while True:
+                success, img = self.cap.read()
+                if not success:
+                    print("Failed to capture image from webcam")
+                    break
+                img = cv2.flip(img, 1)
+                imgCopy = self.process_frame(img)
+                cv2.imshow("Slides", imgCopy)
+                key = cv2.waitKey(1)
+                if key == ord('q'):
+                    break
+            self.cap.release()
+            cv2.destroyAllWindows()
+            return imgCopy
         else:
-            annotationStart = False
-        if fingers == [0, 1, 1, 1, 0]:
-            if annotations:
-                annotations.pop(-1)
-                annotationNumber -= 1
-                buttonPressed = True
-        if fingers == [1, 1, 1, 1, 1]:
-            annotationNumber =0
-            annotations = [[]]
-            buttonPressed = True
+            while True:
+                img = Show()
+                cv2.imshow("Output", img)
+                key = cv2.waitKey(1)
+                if key == ord('q'):
+                    break
+            self.cap.release()
+            cv2.destroyAllWindows()
+            return img
 
-    if buttonPressed:
-        counter += 1
-        if counter > delay:
-            counter = 0
-            buttonPressed = False
+    def process_frame(self, img):
+        img2 = img.copy()
+        img3 = img.copy()
+        if self.imgNumber < len(self.pathImages):
+            pathFullImage = os.path.join(self.folderPath, self.pathImages[self.imgNumber])
+            imgCurrent = cv2.imread(pathFullImage)
+            if imgCurrent is None:
+                print(f"Failed to load image: {pathFullImage}")
+                return img
 
-    for i, annotation in enumerate(annotations):
-        for j in range(len(annotation)):
-            if j != 0:
-                cv2.line(imgCurrent, annotation[j - 1], annotation[j], (0, 0, 200), 12)
+            height2, width2 = imgCurrent.shape[:2]
+            new_width = width2 // 2
+            new_height = height2 // 2
+            imgCurrent = cv2.resize(imgCurrent, (new_width, new_height))
+            imgCopy = imgCurrent.copy()
 
-    h, w, _ = imgCurrent.shape
+            header_width = new_width // 2
+            header = cv2.resize(self.header, (header_width, 50))
+            header_brush = cv2.resize(self.header_brush, (80, 80))
+            header_erase = cv2.resize(self.header_erase, (80, 80))
+            cv2.line(img, (0, self.gestureThreshold), (self.width, self.gestureThreshold), (0, 255, 0), 10)
 
-    # Resize imgSmall with the adjusted width (ws)
-    imgSmall = cv2.resize(img, (ws, hs))
+            if self.thicknessModeActive:
+                imgCopy, self.brushThickness, self.thicknessModeActive = self.controller.process_frame(img2, self.Mode, imgCopy.copy())
+                self.brushThickness = int(self.brushThickness)
+                if self.brushThickness <= 0:
+                    self.brushThickness = 1
 
-    # Define the position for the small image (top right corner, moved left by 10 pixels)
-    x_offset = w - ws -400  # Adjust this value to move further left or right
-    y_offset = 0
+            hands, img = self.detectorHand.findHands(img)
+            if hands and not self.buttonPressed:
+                hand = hands[0]
+                cx, cy = hand["center"]
+                lmList = hand["lmList"]
+                fingers = self.detectorHand.fingersUp(hand)
+                xVal = int(np.interp(lmList[8][0], [(self.width // 2), self.width], [0, self.width]))
+                yVal = int(np.interp(lmList[8][1], [150, self.height - 150], [0, self.height]))
+                xVal = self.prev_x + (xVal - self.prev_x) // self.smoothening
+                yVal = self.prev_y + (yVal - self.prev_y) // self.smoothening
+                self.prev_x, self.prev_y = xVal, yVal
+                indexFinger = xVal, yVal
 
-    # Ensure the region we're copying to is valid
-    if y_offset + hs <= h and x_offset >= 0 and x_offset + ws <= w:
-        imgCurrent[y_offset:y_offset + hs, x_offset:x_offset + ws] = imgSmall
-    else:
-        print("Image dimensions are not sufficient for the small image overlay")
-    cv2.imshow("Slides", imgCurrent)
-    # cv2.imshow("Image",img)
-    key = cv2.waitKey(1)
-    if key == ord('q'):
-        break
+                if cy <= self.gestureThreshold:
+                    if fingers == [1, 0, 0, 0, 0]:
+                        if self.imgNumber > 0:
+                            self.buttonPressed = True
+                            self.reset_annotations()
+                            self.imgNumber -= 1
+                    if fingers == [0, 0, 0, 0, 1]:
+                        if self.imgNumber < len(self.pathImages) - 1:
+                            self.buttonPressed = True
+                            self.reset_annotations()
+                            self.imgNumber += 1
 
-cap.release()
-cv2.destroyAllWindows()
+                if fingers == [0, 1, 1, 0, 0]:
+                    if yVal < 50:
+                        self.change_color(indexFinger, xVal)
+                    self.activate_thickness_mode(xVal, yVal)
+
+                if not self.thicknessModeActive:
+                    cv2.circle(imgCopy, indexFinger, 12, (0, 0, 255), cv2.FILLED)
+
+                if fingers == [0, 1, 0, 0, 0]:
+                    self.draw_or_erase(indexFinger, imgCopy)
+                else:
+                    self.annotationStart = False
+
+                if fingers == [0, 1, 1, 1, 0]:
+                    if self.annotations:
+                        self.annotations.pop(-1)
+                        self.annotationColors.pop(-1)
+                        self.annotationThicknesses.pop(-1)
+                        self.annotationNumber -= 1
+                        self.buttonPressed = True
+
+                if fingers == [1, 1, 1, 1, 1]:
+                    self.reset_annotations()
+                    self.buttonPressed = True
+
+            if self.buttonPressed:
+                self.counter += 1
+                if self.counter > self.delay:
+                    self.counter = 0
+                    self.buttonPressed = False
+
+            self.draw_annotations(imgCopy)
+
+            imgSmall = cv2.resize(img if self.detection else img3, (int(213 * 1), int(120 * 1)))
+            self.overlay_images(imgCopy, imgSmall, header, header_brush, header_erase)
+        else:
+            print(f"No images to display. Image number: {self.imgNumber}")
+
+        return imgCopy
+
+    def reset_annotations(self):
+        self.annotations = [[]]
+        self.annotationColors = [self.drawColor]
+        self.annotationThicknesses = [self.brushThickness]
+        self.annotationNumber = 0
+        self.annotationStart = False
+
+    def change_color(self, indexFinger, xVal):
+        if 360 < xVal < 410:
+            self.header = self.overlayList1[0]
+            self.drawColor = (255, 0, 255)
+        elif 460 < xVal < 510:
+            self.header = self.overlayList1[1]
+            self.drawColor = (255, 0, 0)
+        elif 560 < xVal < 610:
+            self.header = self.overlayList1[2]
+            self.drawColor = (0, 255, 0)
+        elif 660 < xVal < 710:
+            self.header = self.overlayList1[3]
+            self.drawColor = (0, 0, 0)
+
+    def activate_thickness_mode(self, xVal, yVal):
+        if xVal < 80 and 230 < yVal < 300:
+            self.thicknessModeActive = True
+            self.Mode = "brush"
+            self.brushThickness = 12
+            self.controller.reset()
+        elif xVal > 875 and 230 < yVal < 300:
+            self.thicknessModeActive = True
+            self.Mode = "eraser"
+            self.eraserThickness = 20
+            self.controller.reset()
+        else:
+            self.thicknessModeActive = False
+
+    def draw_or_erase(self, indexFinger, imgCopy):
+        if self.drawColor == (0, 0, 0):
+            if not self.annotationStart:
+                self.annotationStart = True
+                self.annotationNumber += 1
+                self.annotations.append([])
+                self.annotationColors.append(self.drawColor)
+                self.annotationThicknesses.append(self.eraserThickness)
+            self.annotations[self.annotationNumber].append(indexFinger)
+            cv2.circle(imgCopy, indexFinger, self.eraserThickness, (255, 255, 255), cv2.FILLED)
+        else:
+            if not self.annotationStart:
+                self.annotationStart = True
+                self.annotationNumber += 1
+                self.annotations.append([])
+                self.annotationColors.append(self.drawColor)
+                self.annotationThicknesses.append(self.brushThickness)
+            self.annotations[self.annotationNumber].append(indexFinger)
+            cv2.circle(imgCopy, indexFinger, 12, self.drawColor, self.brushThickness)
+
+    def draw_annotations(self, imgCopy):
+        for i, annotation in enumerate(self.annotations):
+            for j in range(len(annotation)):
+                if j != 0:
+                    if self.annotationColors[i] == (0, 0, 0):
+                        cv2.line(imgCopy, annotation[j - 1], annotation[j], (255, 255, 255), self.annotationThicknesses[i])
+                    else:
+                        cv2.line(imgCopy, annotation[j - 1], annotation[j], self.annotationColors[i], self.annotationThicknesses[i])
+
+    def overlay_images(self, imgCopy, imgSmall, header, header_brush, header_erase):
+        h, w, _ = imgCopy.shape
+        x_offset = w - imgSmall.shape[1]
+        y_offset = h - imgSmall.shape[0]
+        if y_offset >= 0 and y_offset + imgSmall.shape[0] <= h and x_offset >= 0 and x_offset + imgSmall.shape[1] <= w:
+            imgCopy[y_offset:y_offset + imgSmall.shape[0], x_offset:x_offset + imgSmall.shape[1]] = imgSmall
+
+        new_width = header.shape[1]
+        x_offset2 = (w - new_width) // 2
+        y_offset2 = 0
+        if y_offset2 >= 0 and y_offset2 + header.shape[0] <= imgCopy.shape[0] and x_offset2 >= 0 and x_offset2 + new_width <= w:
+            imgCopy[y_offset2:y_offset2 + header.shape[0], x_offset2:x_offset2 + new_width] = header
+
+        center_y_offset = (imgCopy.shape[0] - header_brush.shape[0]) // 2
+        if center_y_offset >= 0 and center_y_offset + header_brush.shape[0] <= imgCopy.shape[0] and 0 + header_brush.shape[1] <= imgCopy.shape[1]:
+            imgCopy[center_y_offset:center_y_offset + header_brush.shape[0], 0:header_brush.shape[1]] = header_brush
+
+        right_x_offset = imgCopy.shape[1] - header_brush.shape[1]
+        if center_y_offset >= 0 and center_y_offset + header_brush.shape[0] <= imgCopy.shape[0] and right_x_offset >= 0 and right_x_offset + header_brush.shape[1] <= imgCopy.shape[1]:
+            imgCopy[center_y_offset:center_y_offset + header_brush.shape[0], right_x_offset:right_x_offset + header_brush.shape[1]] = header_erase
+
+
+# Create an instance with default parameters
+gesture_presentation = GesturePresentation(detection=True, doc_path="FIFA World Cup Analysis.pdf")
+
+# Run the presentation
+result_image = gesture_presentation.run()
+
+# Save or process the result image as needed
+cv2.imwrite("result_image.jpg", result_image)
