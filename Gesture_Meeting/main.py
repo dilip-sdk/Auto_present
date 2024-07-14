@@ -1,3 +1,5 @@
+from flask import Flask, render_template, Response
+import cv2
 import os
 import cv2
 import numpy as np
@@ -5,14 +7,17 @@ from cvzone.HandTrackingModule import HandDetector
 from thickness import GestureThicknessController
 from slides import save_document_pages_as_images
 from draw import Show
+from thickness import GestureThicknessController
+app = Flask(__name__)
 
 class GesturePresentation:
-    def __init__(self, detection=True, doc_path=""):
+    def __init__(self,folderP, detection=True, doc_path=""):
         self.detection = detection
         self.doc_path = doc_path
-        self.folderPath = "Presentation"
+        self.folderPath = folderP
         self.brushThickness = 12
         self.eraserThickness = 20
+        self.controller = GestureThicknessController()
         self.width, self.height = 1280, 720
         self.gestureThreshold = 400
         self.buttonPressed = False
@@ -26,7 +31,6 @@ class GesturePresentation:
         self.smoothening = 5
         self.prev_x, self.prev_y = 0, 0
         self.drawColor = (255, 0, 0)
-        self.controller = GestureThicknessController()
         self.Mode = "brush"
         self.thicknessModeActive = False
         self.imgNumber = 0
@@ -48,6 +52,7 @@ class GesturePresentation:
         self.header_brush = self.overlayList2[0]
         self.header_erase = self.overlayList2[1]
 
+
     def load_images(self, folderPath):
         images = []
         myList = os.listdir(folderPath)
@@ -58,6 +63,7 @@ class GesturePresentation:
             else:
                 print(f"Failed to load image: {imPath}")
         return images
+        # Your existing run method
 
     def run(self):
         if len(self.pathImages) != 0:
@@ -78,7 +84,7 @@ class GesturePresentation:
         else:
             while True:
                 img = Show()
-                cv2.imshow("Output", img)
+                # cv2.imshow("Output", img)
                 key = cv2.waitKey(1)
                 if key == ord('q'):
                     break
@@ -89,6 +95,7 @@ class GesturePresentation:
     def process_frame(self, img):
         img2 = img.copy()
         img3 = img.copy()
+        imgCopy = img.copy()  # Ensure imgCopy is initialized
         if self.imgNumber < len(self.pathImages):
             pathFullImage = os.path.join(self.folderPath, self.pathImages[self.imgNumber])
             imgCurrent = cv2.imread(pathFullImage)
@@ -109,7 +116,8 @@ class GesturePresentation:
             cv2.line(img, (0, self.gestureThreshold), (self.width, self.gestureThreshold), (0, 255, 0), 10)
 
             if self.thicknessModeActive:
-                imgCopy, self.brushThickness, self.thicknessModeActive = self.controller.process_frame(img2, self.Mode, imgCopy.copy())
+                imgCopy, self.brushThickness, self.thicknessModeActive = self.controller.process_frame(img2, self.Mode,
+                                                                                                       imgCopy.copy())
                 self.brushThickness = int(self.brushThickness)
                 if self.brushThickness <= 0:
                     self.brushThickness = 1
@@ -223,7 +231,7 @@ class GesturePresentation:
                 self.annotationColors.append(self.drawColor)
                 self.annotationThicknesses.append(self.eraserThickness)
             self.annotations[self.annotationNumber].append(indexFinger)
-            cv2.circle(imgCopy, indexFinger, self.eraserThickness, (255, 255, 255), cv2.FILLED)
+            cv2.circle(imgCopy, indexFinger, self.eraserThickness, self.drawColor, cv2.FILLED)
         else:
             if not self.annotationStart:
                 self.annotationStart = True
@@ -232,16 +240,14 @@ class GesturePresentation:
                 self.annotationColors.append(self.drawColor)
                 self.annotationThicknesses.append(self.brushThickness)
             self.annotations[self.annotationNumber].append(indexFinger)
-            cv2.circle(imgCopy, indexFinger, 12, self.drawColor, self.brushThickness)
+            cv2.circle(imgCopy, indexFinger, self.brushThickness, self.drawColor, cv2.FILLED)
 
     def draw_annotations(self, imgCopy):
         for i, annotation in enumerate(self.annotations):
-            for j in range(len(annotation)):
-                if j != 0:
-                    if self.annotationColors[i] == (0, 0, 0):
-                        cv2.line(imgCopy, annotation[j - 1], annotation[j], (255, 255, 255), self.annotationThicknesses[i])
-                    else:
-                        cv2.line(imgCopy, annotation[j - 1], annotation[j], self.annotationColors[i], self.annotationThicknesses[i])
+            for j in range(1, len(annotation)):
+                if annotation and self.annotationColors[i] and self.annotationThicknesses[i]:
+                    cv2.line(imgCopy, annotation[j - 1], annotation[j], self.annotationColors[i],
+                             self.annotationThicknesses[i])
 
     def overlay_images(self, imgCopy, imgSmall, header, header_brush, header_erase):
         h, w, _ = imgCopy.shape
@@ -253,23 +259,51 @@ class GesturePresentation:
         new_width = header.shape[1]
         x_offset2 = (w - new_width) // 2
         y_offset2 = 0
-        if y_offset2 >= 0 and y_offset2 + header.shape[0] <= imgCopy.shape[0] and x_offset2 >= 0 and x_offset2 + new_width <= w:
+        if y_offset2 >= 0 and y_offset2 + header.shape[0] <= imgCopy.shape[
+            0] and x_offset2 >= 0 and x_offset2 + new_width <= w:
             imgCopy[y_offset2:y_offset2 + header.shape[0], x_offset2:x_offset2 + new_width] = header
 
         center_y_offset = (imgCopy.shape[0] - header_brush.shape[0]) // 2
-        if center_y_offset >= 0 and center_y_offset + header_brush.shape[0] <= imgCopy.shape[0] and 0 + header_brush.shape[1] <= imgCopy.shape[1]:
+        if center_y_offset >= 0 and center_y_offset + header_brush.shape[0] <= imgCopy.shape[0] and 0 + \
+                header_brush.shape[1] <= imgCopy.shape[1]:
             imgCopy[center_y_offset:center_y_offset + header_brush.shape[0], 0:header_brush.shape[1]] = header_brush
 
         right_x_offset = imgCopy.shape[1] - header_brush.shape[1]
-        if center_y_offset >= 0 and center_y_offset + header_brush.shape[0] <= imgCopy.shape[0] and right_x_offset >= 0 and right_x_offset + header_brush.shape[1] <= imgCopy.shape[1]:
-            imgCopy[center_y_offset:center_y_offset + header_brush.shape[0], right_x_offset:right_x_offset + header_brush.shape[1]] = header_erase
+        if center_y_offset >= 0 and center_y_offset + header_brush.shape[0] <= imgCopy.shape[
+            0] and right_x_offset >= 0 and right_x_offset + header_brush.shape[1] <= imgCopy.shape[1]:
+            imgCopy[center_y_offset:center_y_offset + header_brush.shape[0],
+            right_x_offset:right_x_offset + header_brush.shape[1]] = header_erase
 
+    def show(self):
+        img = cv2.imread("images/sheet.jpg")
+        cv2.imshow("Output", img)
+        return img
 
-# Create an instance with default parameters
-gesture_presentation = GesturePresentation(detection=True, doc_path="FIFA World Cup Analysis.pdf")
+    def get_frame(self):
+        while True:
+            success, img = self.cap.read()
+            if not success:
+                print("Failed to capture image from webcam")
+                break
+            img = cv2.flip(img, 1)
+            imgCopy = self.process_frame(img)
+            ret, jpeg = cv2.imencode('.jpg', imgCopy)
+            frame = jpeg.tobytes()
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n\r\n')
 
-# Run the presentation
-result_image = gesture_presentation.run()
+@app.route('/')
+def index():
+    return render_template('index.html')  # Create a simple HTML template to display the video feed
 
-# Save or process the result image as needed
-cv2.imwrite("result_image.jpg", result_image)
+@app.route('/video_feed')
+def video_feed():
+    return Response(gesture_presentation.get_frame(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+if __name__ == '__main__':
+    gesture_presentation = GesturePresentation(folderP='Presentation',detection=True,doc_path="FIFA World Cup Analysis.pdf")
+    app.run(debug=True)
+
+# for normalmode
+#     if folderp is empty and doc_path is not given then this will be activated
+#     gesture_presentation = GesturePresentation(folderP='Presentation', detection=True)
